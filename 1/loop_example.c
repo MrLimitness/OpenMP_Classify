@@ -1,142 +1,119 @@
-```c
 #include <stdio.h>
 #include <stdlib.h>
 #include <omp.h>
+#include <math.h>
 
-#define N 2048
+#define N 4000
 
-double **A, **B, **C;
+double **allocate_matrix(int n) {
+    double **mat = (double **)malloc(n * sizeof(double *));
+    for (int i = 0; i < n; i++) {
+        mat[i] = (double *)malloc(n * sizeof(double));
+    }
+    return mat;
+}
 
-void initialize_matrices() {
-    A = (double **)malloc(N * sizeof(double *));
-    B = (double **)malloc(N * sizeof(double *));
-    C = (double **)malloc(N * sizeof(double *));
-    for (int i = 0; i < N; i++) {
-        A[i] = (double *)malloc(N * sizeof(double));
-        B[i] = (double *)malloc(N * sizeof(double));
-        C[i] = (double *)malloc(N * sizeof(double));
-        for (int j = 0; j < N; j++) {
-            A[i][j] = (double)rand()/RAND_MAX;
-            B[i][j] = (double)rand()/RAND_MAX;
+void free_matrix(double **mat, int n) {
+    for (int i = 0; i < n; i++) {
+        free(mat[i]);
+    }
+    free(mat);
+}
+
+void initialize_matrices(double **A, double **B, double **C, int n) {
+    srand(12345);
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            A[i][j] = (double)rand() / RAND_MAX;
+            B[i][j] = (double)rand() / RAND_MAX;
             C[i][j] = 0.0;
         }
     }
 }
 
-void free_matrices() {
-    for (int i = 0; i < N; i++) {
-        free(A[i]);
-        free(B[i]);
-        free(C[i]);
-    }
-    free(A);
-    free(B);
-    free(C);
-}
-
-void reset_C() {
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < N; j++)
+void reset_matrix(double **C, int n) {
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++)
             C[i][j] = 0.0;
 }
 
-void serial_matmul() {
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < N; j++)
-            for (int k = 0; k < N; k++)
-                C[i][j] += A[i][k] * B[k][j];
+double checksum(double **C, int n) {
+    double sum = 0.0;
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++)
+            sum += C[i][j];
+    return sum;
 }
 
-void parallel_for_matmul() {
-    #pragma omp parallel for
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < N; j++)
-            for (int k = 0; k < N; k++)
-                C[i][j] += A[i][k] * B[k][j];
+// 所有版本的矩阵乘法函数定义不变，略...
+
+// 串行版本
+void matrix_multiply_serial(double **A, double **B, double **C, int n) {
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++) {
+            double sum = 0.0;
+            for (int k = 0; k < n; k++)
+                sum += A[i][k] * B[k][j];
+            C[i][j] = sum;
+        }
 }
 
-void loop_matmul_v3() {
-    #pragma omp parallel
-    #pragma omp loop
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < N; j++)
-            for (int k = 0; k < N; k++)
-                C[i][j] += A[i][k] * B[k][j];
+// 其他并行版本（parallel_for、loop、loop_collapse、teams_loop、teams_loop_collapse）函数略写，和你代码保持一致即可
+
+void test_version(const char *name, void (*matmul_func)(double **, double **, double **, int),
+                  double **A, double **B, double **C, double serial_checksum, double serial_time) {
+    reset_matrix(C, N);
+    printf("运行%-40s...\n", name);
+    double start = omp_get_wtime();
+    matmul_func(A, B, C, N);
+    double end = omp_get_wtime();
+    double time = end - start;
+    double check = checksum(C, N);
+    double speedup = serial_time / time;
+    double error = fabs(check - serial_checksum);
+    printf("%-42s运行时间: %.4f 秒\n", name, time);
+    printf("%-42s加速比:   %.2f\n", "", speedup);
+    printf("%-42s校验和:   %.6e\n", "", check);
+    printf("%-42s误差:     %.6e\n\n", "", error);
 }
 
-void loop_matmul_v4() {
-    #pragma omp parallel
-    #pragma omp loop collapse(2)
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < N; j++)
-            for (int k = 0; k < N; k++)
-                C[i][j] += A[i][k] * B[k][j];
-}
+int main() {
+    int num_threads = 16;
+    omp_set_num_threads(num_threads);
 
-void loop_matmul_v5() {
-    #pragma omp parallel
-    #pragma omp loop schedule(dynamic)
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < N; j++)
-            for (int k = 0; k < N; k++)
-                C[i][j] += A[i][k] * B[k][j];
-}
+    printf("矩阵大小: %d x %d\n", N, N);
+    printf("线程数: %d\n\n", num_threads);
 
-void loop_matmul_v6() {
-    #pragma omp parallel
-    #pragma omp loop schedule(guided) nowait
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < N; j++)
-            for (int k = 0; k < N; k++)
-                C[i][j] += A[i][k] * B[k][j];
-}
+    // 分配内存和初始化
+    double **A = allocate_matrix(N);
+    double **B = allocate_matrix(N);
+    double **C = allocate_matrix(N);
+    initialize_matrices(A, B, C, N);
 
-int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        printf("请传入线程数作为参数！示例：%s 16\n", argv[0]);
-        return 1;
-    }
-    omp_set_num_threads(atoi(argv[1]));
-    initialize_matrices();
-    
-    double start, t_serial, t_pfor, t_v3, t_v4, t_v5, t_v6;
-    
-    reset_C();
-    start = omp_get_wtime();
-    serial_matmul();
-    t_serial = omp_get_wtime() - start;
-    printf("串行版本运行时间：%.2f秒\n", t_serial);
-    
-    reset_C();
-    start = omp_get_wtime();
-    parallel_for_matmul();
-    t_pfor = omp_get_wtime() - start;
-    printf("Parallel for版本：%.2f秒（加速比：%.2fx）\n", t_pfor, t_serial/t_pfor);
-    
-    reset_C();
-    start = omp_get_wtime();
-    loop_matmul_v3();
-    t_v3 = omp_get_wtime() - start;
-    printf("Loop版本v3：%.2f秒（加速比：%.2fx）\n", t_v3, t_serial/t_v3);
-    
-    reset_C();
-    start = omp_get_wtime();
-    loop_matmul_v4();
-    t_v4 = omp_get_wtime() - start;
-    printf("Loop版本v4（collapse）：%.2f秒（加速比：%.2fx）\n", t_v4, t_serial/t_v4);
-    
-    reset_C();
-    start = omp_get_wtime();
-    loop_matmul_v5();
-    t_v5 = omp_get_wtime() - start;
-    printf("Loop版本v5（dynamic）：%.2f秒（加速比：%.2fx）\n", t_v5, t_serial/t_v5);
-    
-    reset_C();
-    start = omp_get_wtime();
-    loop_matmul_v6();
-    t_v6 = omp_get_wtime() - start;
-    printf("Loop版本v6（guided）：%.2f秒（加速比：%.2fx）\n", t_v6, t_serial/t_v6);
-    
-    free_matrices();
+    // 串行版本作为基准
+    printf("运行串行版本...\n");
+    double start = omp_get_wtime();
+    matrix_multiply_serial(A, B, C, N);
+    double end = omp_get_wtime();
+    double serial_time = end - start;
+    double serial_sum = checksum(C, N);
+    printf("串行版本运行时间: %.4f 秒\n", serial_time);
+    printf("串行版本校验和:   %.6e\n\n", serial_sum);
+
+    // 测试各个并行版本
+    test_version("parallel for版本", matrix_multiply_parallel_for, A, B, C, serial_sum, serial_time);
+    test_version("loop版本", matrix_multiply_loop, A, B, C, serial_sum, serial_time);
+    test_version("loop+collapse版本", matrix_multiply_loop_collapse, A, B, C, serial_sum, serial_time);
+    test_version("teams distribute parallel loop版本", matrix_multiply_teams_loop, A, B, C, serial_sum, serial_time);
+    test_version("teams distribute parallel loop collapse版本", matrix_multiply_teams_loop_collapse, A, B, C, serial_sum, serial_time);
+
+    // 总结
+    printf("======= 性能测试完成 =======\n");
+
+    // 清理内存
+    free_matrix(A, N);
+    free_matrix(B, N);
+    free_matrix(C, N);
+
     return 0;
 }

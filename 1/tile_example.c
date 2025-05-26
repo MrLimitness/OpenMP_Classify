@@ -1,146 +1,183 @@
-```c
 #include <stdio.h>
 #include <stdlib.h>
 #include <omp.h>
 #include <time.h>
+#include <math.h>
 
-#define N 2048
-#define TILE_SIZE 32
+#define N 1500  // 定义矩阵大小
 
-float **a, **b, **c;
-
-void init_matrix(float ***matrix) {
-    *matrix = (float **)malloc(N * sizeof(float *));
-    for (int i = 0; i < N; i++) {
-        (*matrix)[i] = (float *)malloc(N * sizeof(float));
-        for (int j = 0; j < N; j++) {
-            (*matrix)[i][j] = (float)rand() / RAND_MAX;
-        }
-    }
-}
-
-void serial() {
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            float sum = 0.0;
-            for (int k = 0; k < N; k++) {
-                sum += a[i][k] * b[k][j];
+// 串行版本
+void matrix_multiply_serial(double **A, double **B, double **C, int n) {
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            double sum = 0.0;
+            for (int k = 0; k < n; k++) {
+                sum += A[i][k] * B[k][j];
             }
-            c[i][j] = sum;
+            C[i][j] = sum;
         }
     }
 }
 
-void parallel_for() {
+// parallel for
+void matrix_multiply_parallel_for(double **A, double **B, double **C, int n) {
     #pragma omp parallel for
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            float sum = 0.0;
-            for (int k = 0; k < N; k++) {
-                sum += a[i][k] * b[k][j];
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            double sum = 0.0;
+            for (int k = 0; k < n; k++) {
+                sum += A[i][k] * B[k][j];
             }
-            c[i][j] = sum;
+            C[i][j] = sum;
         }
     }
 }
 
-void tile_version() {
-    #pragma omp parallel for
-    for (int i = 0; i < N; i += TILE_SIZE) {
-        for (int j = 0; j < N; j += TILE_SIZE) {
-            #pragma omp tile sizes(TILE_SIZE, TILE_SIZE)
-            for (int ii = i; ii < i + TILE_SIZE; ii++) {
-                for (int jj = j; jj < j + TILE_SIZE; jj++) {
-                    float sum = 0.0;
-                    for (int k = 0; k < N; k++) {
-                        sum += a[ii][k] * b[k][jj];
+// 手动tile优化
+void matrix_multiply_manual_tile(double **A, double **B, double **C, int n) {
+    const int tile_size = 32;
+    #pragma omp parallel for collapse(2)
+    for (int ii = 0; ii < n; ii += tile_size) {
+        for (int jj = 0; jj < n; jj += tile_size) {
+            for (int kk = 0; kk < n; kk += tile_size) {
+                for (int i = ii; i < ii + tile_size && i < n; i++) {
+                    for (int j = jj; j < jj + tile_size && j < n; j++) {
+                        double sum = (kk == 0) ? 0.0 : C[i][j];
+                        for (int k = kk; k < kk + tile_size && k < n; k++) {
+                            sum += A[i][k] * B[k][j];
+                        }
+                        C[i][j] = sum;
                     }
-                    c[ii][jj] = sum;
                 }
             }
         }
     }
 }
 
-int main(int argc, char *argv[]) {
-    if (argc != 3) {
-        printf("使用方法: %s <版本号1-3> <线程数>\n", argv[0]);
-        return 1;
+int main() {
+    int num_threads = 64;
+    omp_set_num_threads(num_threads);
+
+    printf("\n矩阵大小: %d x %d\n", N, N);
+    printf("运行线程数: %d\n\n", num_threads);
+
+    double **A = (double **)malloc(N * sizeof(double *));
+    double **B = (double **)malloc(N * sizeof(double *));
+    double **C = (double **)malloc(N * sizeof(double *));
+    for (int i = 0; i < N; i++) {
+        A[i] = (double *)malloc(N * sizeof(double));
+        B[i] = (double *)malloc(N * sizeof(double));
+        C[i] = (double *)malloc(N * sizeof(double));
     }
 
-    int version = atoi(argv[1]);
-    int threads = atoi(argv[2]);
-    omp_set_num_threads(threads);
-
-    init_matrix(&a);
-    init_matrix(&b);
-    init_matrix(&c);
-
-    double start, end;
-    double serial_time = 0.0;
-
-    if (version == 1) {
-        start = omp_get_wtime();
-        serial();
-        end = omp_get_wtime();
-        serial_time = end - start;
-        printf("串行版本运行时间: %.2f秒\n", serial_time);
-    } else {
-        // 先运行串行版本获取基准时间
-        start = omp_get_wtime();
-        serial();
-        end = omp_get_wtime();
-        serial_time = end - start;
+    srand(time(NULL));
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            A[i][j] = (double)rand() / RAND_MAX;
+            B[i][j] = (double)rand() / RAND_MAX;
+            C[i][j] = 0.0;
+        }
     }
 
-    // 重置结果矩阵
+    printf("运行串行版本...\n");
+    double start = omp_get_wtime();
+    matrix_multiply_serial(A, B, C, N);
+    double end = omp_get_wtime();
+    double serial_time = end - start;
+    printf("串行运行时间: %.4f 秒\n", serial_time);
+
+    double checksum_serial = 0.0;
     for (int i = 0; i < N; i++)
         for (int j = 0; j < N; j++)
-            c[i][j] = 0.0;
+            checksum_serial += C[i][j];
+    printf("串行结果校验和: %.6e\n\n", checksum_serial);
 
+    // 初始化C
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++)
+            C[i][j] = 0.0;
+
+    printf("运行parallel for版本...\n");
     start = omp_get_wtime();
-    switch(version) {
-        case 1: serial(); break;
-        case 2: parallel_for(); break;
-        case 3: tile_version(); break;
-        default: printf("无效版本号\n"); return 1;
-    }
+    matrix_multiply_parallel_for(A, B, C, N);
     end = omp_get_wtime();
-
     double parallel_time = end - start;
-    if (version != 1) {
-        printf("并行版本运行时间: %.2f秒\n", parallel_time);
-        printf("加速比: %.2f倍\n", serial_time / parallel_time);
-    }
+    printf("parallel for运行时间: %.4f 秒\n", parallel_time);
+    printf("加速比: %.2f\n", serial_time / parallel_time);
 
-    // 释放内存
+    double checksum_parallel = 0.0;
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++)
+            checksum_parallel += C[i][j];
+    printf("parallel for结果校验和: %.6e\n", checksum_parallel);
+    printf("误差: %.6e\n\n", fabs(checksum_parallel - checksum_serial));
+
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++)
+            C[i][j] = 0.0;
+
+    printf("运行手动tile版本...\n");
+    start = omp_get_wtime();
+    matrix_multiply_manual_tile(A, B, C, N);
+    end = omp_get_wtime();
+    double tile_time = end - start;
+    printf("手动tile运行时间: %.4f 秒\n", tile_time);
+    printf("加速比: %.2f\n", serial_time / tile_time);
+
+    double checksum_tile = 0.0;
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++)
+            checksum_tile += C[i][j];
+    printf("手动tile结果校验和: %.6e\n", checksum_tile);
+    printf("误差: %.6e\n", fabs(checksum_tile - checksum_serial));
+
     for (int i = 0; i < N; i++) {
-        free(a[i]);
-        free(b[i]);
-        free(c[i]);
+        free(A[i]);
+        free(B[i]);
+        free(C[i]);
     }
-    free(a);
-    free(b);
-    free(c);
+    free(A);
+    free(B);
+    free(C);
 
     return 0;
 }
-```
 
-使用方法：  
-`gcc -O3 -fopenmp -o matmul matmul.c`  
-运行命令：  
-`./matmul <1-3> <线程数>` （1=串行，2=parallel for，3=tile版本）  
+// 矩阵大小: 1500 x 1500
+// 运行线程数: 16
 
-示例输出：  
-`./matmul 1 1` 输出串行时间  
-`./matmul 2 16` 输出并行时间和加速比  
-`./matmul 3 16` 输出tile版本时间和加速比  
+// 运行串行版本...
+// 串行运行时间: 7.4599 秒
+// 串行结果校验和: 8.425293e+08
 
-该脚本：  
-1. 使用2048x2048大矩阵确保计算量  
-2. 动态内存分配避免栈溢出  
-3. 支持三个版本对比  
-4. 可设置任意线程数（建议16/64/144）  
-5. 自动计算加速比  
-6. 中文输出结果
+// 运行parallel for版本...
+// parallel for运行时间: 1.0390 秒
+// 加速比: 7.18
+// parallel for结果校验和: 8.425293e+08
+// 误差: 0.000000e+00
+
+// 运行手动tile版本...
+// 手动tile运行时间: 0.9632 秒
+// 加速比: 7.74
+// 手动tile结果校验和: 8.425293e+08
+// 误差: 0.000000e+00
+
+
+// 矩阵大小: 1500 x 1500
+// 运行线程数: 64
+
+// 运行串行版本...
+// 串行运行时间: 9.9397 秒
+// 串行结果校验和: 8.435140e+08
+
+// 运行parallel for版本...
+// parallel for运行时间: 0.4287 秒
+// 加速比: 23.19
+// parallel for结果校验和: 8.435140e+08
+// 误差: 0.000000e+00
+
+// 运行手动tile版本...
+// 手动tile运行时间: 0.2347 秒
+// 加速比: 42.35
+// 手动tile结果校验和: 8.435140e+08
+// 误差: 0.000000e+00
